@@ -4,9 +4,8 @@ import Order "mo:core/Order";
 import Text "mo:core/Text";
 import Map "mo:core/Map";
 import Iter "mo:core/Iter";
+import Int "mo:core/Int";
 import Runtime "mo:core/Runtime";
-
-
 
 actor {
   public type Lead = {

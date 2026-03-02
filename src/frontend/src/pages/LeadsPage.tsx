@@ -24,21 +24,25 @@ import {
   ArrowUpDown,
   ChevronDown,
   ChevronUp,
+  Download,
   Edit,
   Eye,
   Filter,
   Plus,
   Search,
   Trash2,
+  Upload,
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
 import type { Lead } from "../backend.d.ts";
 import EditLeadModal from "../components/EditLeadModal";
+import ImportLeadsModal from "../components/ImportLeadsModal";
 import { useDeleteLead, useGetLeads } from "../hooks/useQueries";
 import {
   PROPERTY_TYPES,
   STATUS_OPTIONS,
+  exportLeadsToCSV,
   formatDate,
   getStatusBadgeClass,
   isOverdue,
@@ -58,6 +62,7 @@ export default function LeadsPage() {
   const [sortDir, setSortDir] = useState<SortDirection>(null);
   const [deleteId, setDeleteId] = useState<bigint | null>(null);
   const [editLead, setEditLead] = useState<Lead | null>(null);
+  const [importOpen, setImportOpen] = useState(false);
 
   const filteredLeads = useMemo(() => {
     let data = leads ?? [];
@@ -158,15 +163,31 @@ export default function LeadsPage() {
             )}
           </p>
         </div>
-        <Button
-          asChild
-          className="bg-primary hover:bg-navy-600 text-white shrink-0"
-        >
-          <Link to="/add-lead">
-            <Plus className="h-4 w-4 mr-2" />
-            Add Lead
-          </Link>
-        </Button>
+        <div className="flex gap-2 shrink-0">
+          <Button
+            variant="outline"
+            onClick={() => setImportOpen(true)}
+            data-ocid="leads.import_button"
+          >
+            <Upload className="h-4 w-4 mr-2" />
+            Import Leads
+          </Button>
+          <Button
+            variant="outline"
+            onClick={() => exportLeadsToCSV(filteredLeads)}
+            disabled={filteredLeads.length === 0}
+            data-ocid="leads.export_button"
+          >
+            <Download className="h-4 w-4 mr-2" />
+            Export Leads
+          </Button>
+          <Button asChild className="bg-primary hover:bg-navy-600 text-white">
+            <Link to="/add-lead">
+              <Plus className="h-4 w-4 mr-2" />
+              Add Lead
+            </Link>
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -451,6 +472,12 @@ export default function LeadsPage() {
           onClose={() => setEditLead(null)}
         />
       )}
+
+      {/* Import modal */}
+      <ImportLeadsModal
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+      />
     </div>
   );
 }
