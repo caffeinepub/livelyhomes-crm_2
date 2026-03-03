@@ -28,6 +28,7 @@ import {
   Edit,
   Eye,
   Filter,
+  Loader2,
   Plus,
   Search,
   Trash2,
@@ -35,9 +36,10 @@ import {
 } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
-import type { Lead } from "../backend.d.ts";
+import type { Disposition, Lead } from "../backend.d.ts";
 import EditLeadModal from "../components/EditLeadModal";
 import ImportLeadsModal from "../components/ImportLeadsModal";
+import { useActor } from "../hooks/useActor";
 import { useDeleteLead, useGetLeads } from "../hooks/useQueries";
 import {
   PROPERTY_TYPES,
@@ -54,6 +56,7 @@ export default function LeadsPage() {
   const navigate = useNavigate();
   const { data: leads, isLoading } = useGetLeads();
   const deleteMutation = useDeleteLead();
+  const { actor } = useActor();
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -63,6 +66,7 @@ export default function LeadsPage() {
   const [deleteId, setDeleteId] = useState<bigint | null>(null);
   const [editLead, setEditLead] = useState<Lead | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [isExporting, setIsExporting] = useState(false);
 
   const filteredLeads = useMemo(() => {
     let data = leads ?? [];
@@ -142,6 +146,27 @@ export default function LeadsPage() {
     );
   };
 
+  const handleExport = async () => {
+    if (!actor || filteredLeads.length === 0) return;
+    setIsExporting(true);
+    try {
+      // Fetch all dispositions in parallel
+      const dispositionResults = await Promise.all(
+        filteredLeads.map((lead) => actor.getDispositions(lead.id)),
+      );
+      const dispositionsMap = new Map<string, Disposition[]>();
+      filteredLeads.forEach((lead, idx) => {
+        dispositionsMap.set(lead.id.toString(), dispositionResults[idx]);
+      });
+      exportLeadsToCSV(filteredLeads, dispositionsMap);
+      toast.success("Leads exported successfully");
+    } catch {
+      toast.error("Failed to export leads");
+    } finally {
+      setIsExporting(false);
+    }
+  };
+
   const overdueCount = (leads ?? []).filter((l) =>
     isOverdue(l.nextFollowupDate),
   ).length;
@@ -174,12 +199,16 @@ export default function LeadsPage() {
           </Button>
           <Button
             variant="outline"
-            onClick={() => exportLeadsToCSV(filteredLeads)}
-            disabled={filteredLeads.length === 0}
+            onClick={handleExport}
+            disabled={filteredLeads.length === 0 || isExporting}
             data-ocid="leads.export_button"
           >
-            <Download className="h-4 w-4 mr-2" />
-            Export Leads
+            {isExporting ? (
+              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+            ) : (
+              <Download className="h-4 w-4 mr-2" />
+            )}
+            {isExporting ? "Exporting..." : "Export Leads"}
           </Button>
           <Button asChild className="bg-primary hover:bg-navy-600 text-white">
             <Link to="/add-lead">

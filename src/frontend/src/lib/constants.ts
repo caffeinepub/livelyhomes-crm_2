@@ -1,4 +1,4 @@
-import type { Lead } from "../backend.d.ts";
+import type { Disposition, Lead } from "../backend.d.ts";
 
 export const STATUS_OPTIONS = [
   "Tele Meeting Done",
@@ -99,6 +99,17 @@ export interface ParsedLead {
   notes: string;
 }
 
+export interface ParsedDisposition {
+  status: string;
+  notes: string;
+  dateTime: string;
+  followupDate: string;
+}
+
+export interface ParsedLeadWithDispositions extends ParsedLead {
+  dispositions: ParsedDisposition[];
+}
+
 const MONTH_MAP: Record<string, string> = {
   jan: "01",
   feb: "02",
@@ -155,54 +166,143 @@ function splitCSVRow(row: string): string[] {
 }
 
 export function parseLeadsCSV(csvText: string): {
-  valid: ParsedLead[];
+  leads: ParsedLeadWithDispositions[];
   invalid: number;
 } {
   const lines = csvText.split(/\r?\n/);
-  const valid: ParsedLead[] = [];
+  if (lines.length < 1) return { leads: [], invalid: 0 };
+
+  const headerCols = splitCSVRow(lines[0]);
+  // Detect new format by checking if first column header is ROW_TYPE
+  const hasRowType = headerCols[0]?.trim().toUpperCase() === "ROW_TYPE";
+
+  const leads: ParsedLeadWithDispositions[] = [];
   let invalid = 0;
 
-  // Skip header row (index 0)
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i].trim();
-    if (!line) continue;
+  if (hasRowType) {
+    // New format: ROW_TYPE,Full Name,Phone,Budget,Preferred Location,Property Type,Lead Source,Status,Next Follow-up Date,Notes,Disposition Status,Disposition Notes,Disposition DateTime,Disposition FollowupDate
+    let currentLead: ParsedLeadWithDispositions | null = null;
 
-    const cols = splitCSVRow(line);
-    const [
-      fullName = "",
-      phone = "",
-      budget = "",
-      preferredLocation = "",
-      propertyType = "",
-      leadSource = "",
-      status = "",
-      nextFollowupDateRaw = "",
-      notes = "",
-    ] = cols;
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
 
-    if (!fullName.trim() || !phone.trim()) {
-      invalid++;
-      continue;
+      const cols = splitCSVRow(line);
+      const rowType = cols[0]?.trim().toUpperCase();
+
+      if (rowType === "LEAD") {
+        const [
+          ,
+          fullName = "",
+          phone = "",
+          budget = "",
+          preferredLocation = "",
+          propertyType = "",
+          leadSource = "",
+          status = "",
+          nextFollowupDateRaw = "",
+          notes = "",
+        ] = cols;
+
+        if (!fullName.trim() || !phone.trim()) {
+          invalid++;
+          currentLead = null;
+          continue;
+        }
+
+        currentLead = {
+          fullName: fullName.trim(),
+          phone: phone.trim(),
+          budget: budget.trim(),
+          preferredLocation: preferredLocation.trim(),
+          propertyType: propertyType.trim(),
+          leadSource: leadSource.trim(),
+          status: status.trim(),
+          nextFollowupDate: parseDateDDMonYYYY(nextFollowupDateRaw.trim()),
+          notes: notes.trim(),
+          dispositions: [],
+        };
+        leads.push(currentLead);
+      } else if (rowType === "DISPOSITION" && currentLead) {
+        const [
+          ,
+          ,
+          ,
+          ,
+          ,
+          ,
+          ,
+          ,
+          ,
+          ,
+          dispStatus = "",
+          dispNotes = "",
+          dispDateTime = "",
+          dispFollowupDate = "",
+        ] = cols;
+
+        currentLead.dispositions.push({
+          status: dispStatus.trim(),
+          notes: dispNotes.trim(),
+          dateTime: dispDateTime.trim(),
+          followupDate: dispFollowupDate.trim(),
+        });
+      }
     }
+  } else {
+    // Old format (backwards compat): Full Name,Phone,Budget,Preferred Location,Property Type,Lead Source,Status,Next Follow-up Date,Notes
+    for (let i = 1; i < lines.length; i++) {
+      const line = lines[i].trim();
+      if (!line) continue;
 
-    valid.push({
-      fullName: fullName.trim(),
-      phone: phone.trim(),
-      budget: budget.trim(),
-      preferredLocation: preferredLocation.trim(),
-      propertyType: propertyType.trim(),
-      leadSource: leadSource.trim(),
-      status: status.trim(),
-      nextFollowupDate: parseDateDDMonYYYY(nextFollowupDateRaw.trim()),
-      notes: notes.trim(),
-    });
+      const cols = splitCSVRow(line);
+      const [
+        fullName = "",
+        phone = "",
+        budget = "",
+        preferredLocation = "",
+        propertyType = "",
+        leadSource = "",
+        status = "",
+        nextFollowupDateRaw = "",
+        notes = "",
+      ] = cols;
+
+      if (!fullName.trim() || !phone.trim()) {
+        invalid++;
+        continue;
+      }
+
+      leads.push({
+        fullName: fullName.trim(),
+        phone: phone.trim(),
+        budget: budget.trim(),
+        preferredLocation: preferredLocation.trim(),
+        propertyType: propertyType.trim(),
+        leadSource: leadSource.trim(),
+        status: status.trim(),
+        nextFollowupDate: parseDateDDMonYYYY(nextFollowupDateRaw.trim()),
+        notes: notes.trim(),
+        dispositions: [],
+      });
+    }
   }
 
-  return { valid, invalid };
+  return { leads, invalid };
 }
 
-export function exportLeadsToCSV(leads: Lead[]): void {
+export function exportLeadsToCSV(
+  leads: Lead[],
+  dispositionsMap: Map<string, Disposition[]>,
+): void {
+  const escapeCSV = (value: string): string => {
+    const str = value ?? "";
+    return `"${str.replace(/"/g, '""')}"`;
+  };
+
+  // Headers: ROW_TYPE + lead columns + disposition columns
   const headers = [
+    "ROW_TYPE",
     "Full Name",
     "Phone",
     "Budget",
@@ -212,30 +312,59 @@ export function exportLeadsToCSV(leads: Lead[]): void {
     "Status",
     "Next Follow-up Date",
     "Notes",
+    "Disposition Status",
+    "Disposition Notes",
+    "Disposition DateTime",
+    "Disposition FollowupDate",
   ];
 
-  const escapeCSV = (value: string): string => {
-    const str = value ?? "";
-    return `"${str.replace(/"/g, '""')}"`;
-  };
+  const csvRows: string[] = [headers.map((h) => `"${h}"`).join(",")];
 
-  const rows = leads.map((lead) => [
-    escapeCSV(lead.fullName),
-    escapeCSV(lead.phone),
-    escapeCSV(lead.budget),
-    escapeCSV(lead.preferredLocation),
-    escapeCSV(lead.propertyType),
-    escapeCSV(lead.leadSource),
-    escapeCSV(lead.status),
-    escapeCSV(formatDate(lead.nextFollowupDate)),
-    escapeCSV(lead.notes),
-  ]);
+  for (const lead of leads) {
+    // LEAD row — disposition columns are empty
+    const leadRow = [
+      escapeCSV("LEAD"),
+      escapeCSV(lead.fullName),
+      escapeCSV(lead.phone),
+      escapeCSV(lead.budget),
+      escapeCSV(lead.preferredLocation),
+      escapeCSV(lead.propertyType),
+      escapeCSV(lead.leadSource),
+      escapeCSV(lead.status),
+      escapeCSV(formatDate(lead.nextFollowupDate)),
+      escapeCSV(lead.notes),
+      escapeCSV(""),
+      escapeCSV(""),
+      escapeCSV(""),
+      escapeCSV(""),
+    ];
+    csvRows.push(leadRow.join(","));
 
-  const csvContent = [
-    headers.map((h) => `"${h}"`).join(","),
-    ...rows.map((row) => row.join(",")),
-  ].join("\n");
+    // DISPOSITION rows — sorted oldest first (dispositionsMap stores newest-first, so reverse)
+    const dispositions = dispositionsMap.get(lead.id.toString()) ?? [];
+    const sorted = [...dispositions].reverse();
+    for (const disp of sorted) {
+      const dispRow = [
+        escapeCSV("DISPOSITION"),
+        escapeCSV(""),
+        escapeCSV(""),
+        escapeCSV(""),
+        escapeCSV(""),
+        escapeCSV(""),
+        escapeCSV(""),
+        escapeCSV(""),
+        escapeCSV(""),
+        escapeCSV(""),
+        escapeCSV(disp.status),
+        escapeCSV(disp.notes),
+        escapeCSV(disp.dateTime),
+        escapeCSV(disp.followupDate),
+      ];
+      csvRows.push(dispRow.join(","));
+    }
+  }
 
+  const csvContent = csvRows.join("\n");
   const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");

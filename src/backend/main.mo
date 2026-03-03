@@ -3,7 +3,6 @@ import Array "mo:core/Array";
 import Order "mo:core/Order";
 import Text "mo:core/Text";
 import Map "mo:core/Map";
-import Iter "mo:core/Iter";
 import Int "mo:core/Int";
 import Runtime "mo:core/Runtime";
 
@@ -156,7 +155,8 @@ actor {
   };
 
   public query ({ caller }) func getDispositions(leadId : Nat) : async [Disposition] {
-    let filtered = dispositions.values().toArray().filter(func(d) { d.leadId == leadId });
+    let all = dispositions.values().toArray();
+    let filtered = all.filter(func(d) { d.leadId == leadId });
     filtered.sort(Disposition.compareByCreatedAt);
   };
 
@@ -170,16 +170,16 @@ actor {
   };
 
   public query ({ caller }) func getTodayFollowups(todayDate : Text) : async [Lead] {
-    let filtered = leads.values().toArray().filter(func(lead) { lead.nextFollowupDate == todayDate });
+    let all = leads.values().toArray();
+    let filtered = all.filter(func(lead) { lead.nextFollowupDate == todayDate });
     filtered.sort(Lead.compareByCreatedAt);
   };
 
   public query ({ caller }) func getOverdueLeads(todayDate : Text) : async [Lead] {
-    let filtered = leads.values().toArray().filter(
-      func(lead) {
-        lead.nextFollowupDate != "" and (lead.nextFollowupDate < todayDate)
-      }
-    );
+    let all = leads.values().toArray();
+    let filtered = all.filter(func(lead) {
+      lead.nextFollowupDate != "" and (lead.nextFollowupDate < todayDate)
+    });
     filtered.sort(Lead.compareByCreatedAt);
   };
 

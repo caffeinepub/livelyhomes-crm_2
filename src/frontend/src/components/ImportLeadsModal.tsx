@@ -10,8 +10,11 @@ import {
 import { CheckCircle2, FileText, Loader2, Upload, XCircle } from "lucide-react";
 import { useRef, useState } from "react";
 import { toast } from "sonner";
-import { useAddLead } from "../hooks/useQueries";
-import { type ParsedLead, parseLeadsCSV } from "../lib/constants";
+import { useAddDisposition, useAddLead } from "../hooks/useQueries";
+import {
+  type ParsedLeadWithDispositions,
+  parseLeadsCSV,
+} from "../lib/constants";
 
 interface ImportLeadsModalProps {
   open: boolean;
@@ -25,14 +28,27 @@ export default function ImportLeadsModal({
   onClose,
 }: ImportLeadsModalProps) {
   const addLead = useAddLead();
+  const addDisposition = useAddDisposition();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<Step>("upload");
   const [isDragging, setIsDragging] = useState(false);
   const [fileName, setFileName] = useState("");
-  const [validLeads, setValidLeads] = useState<ParsedLead[]>([]);
+  const [validLeads, setValidLeads] = useState<ParsedLeadWithDispositions[]>(
+    [],
+  );
   const [invalidCount, setInvalidCount] = useState(0);
-  const [progress, setProgress] = useState({ current: 0, total: 0 });
+  const [progress, setProgress] = useState({
+    current: 0,
+    total: 0,
+    currentDispositions: 0,
+    totalDispositions: 0,
+  });
+
+  const totalDispositions = validLeads.reduce(
+    (acc, l) => acc + l.dispositions.length,
+    0,
+  );
 
   const reset = () => {
     setStep("upload");
@@ -40,7 +56,12 @@ export default function ImportLeadsModal({
     setFileName("");
     setValidLeads([]);
     setInvalidCount(0);
-    setProgress({ current: 0, total: 0 });
+    setProgress({
+      current: 0,
+      total: 0,
+      currentDispositions: 0,
+      totalDispositions: 0,
+    });
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -58,8 +79,8 @@ export default function ImportLeadsModal({
     const reader = new FileReader();
     reader.onload = (e) => {
       const text = e.target?.result as string;
-      const { valid, invalid } = parseLeadsCSV(text);
-      setValidLeads(valid);
+      const { leads, invalid } = parseLeadsCSV(text);
+      setValidLeads(leads);
       setInvalidCount(invalid);
       setStep("preview");
     };
@@ -87,15 +108,25 @@ export default function ImportLeadsModal({
 
   const handleImport = async () => {
     if (validLeads.length === 0) return;
+    const totalDisps = validLeads.reduce(
+      (acc, l) => acc + l.dispositions.length,
+      0,
+    );
     setStep("importing");
-    setProgress({ current: 0, total: validLeads.length });
+    setProgress({
+      current: 0,
+      total: validLeads.length,
+      currentDispositions: 0,
+      totalDispositions: totalDisps,
+    });
 
-    let failedCount = 0;
+    let failedLeads = 0;
+    let importedDispositions = 0;
 
     for (let i = 0; i < validLeads.length; i++) {
       const lead = validLeads[i];
       try {
-        await addLead.mutateAsync({
+        const createdLead = await addLead.mutateAsync({
           fullName: lead.fullName,
           phone: lead.phone,
           budget: lead.budget,
@@ -106,23 +137,43 @@ export default function ImportLeadsModal({
           nextFollowupDate: lead.nextFollowupDate,
           notes: lead.notes,
         });
+
+        // Import dispositions sequentially for this lead
+        for (const disp of lead.dispositions) {
+          try {
+            await addDisposition.mutateAsync({
+              leadId: createdLead.id,
+              status: disp.status,
+              notes: disp.notes,
+              dateTime: disp.dateTime,
+              followupDate: disp.followupDate,
+            });
+            importedDispositions++;
+          } catch {
+            // Disposition failed — continue to next
+          }
+          setProgress((prev) => ({
+            ...prev,
+            currentDispositions: importedDispositions,
+          }));
+        }
       } catch {
-        failedCount++;
+        failedLeads++;
       }
-      setProgress({ current: i + 1, total: validLeads.length });
+      setProgress((prev) => ({ ...prev, current: i + 1 }));
     }
 
     setStep("done");
 
-    const successCount = validLeads.length - failedCount;
+    const successCount = validLeads.length - failedLeads;
     if (successCount > 0) {
       toast.success(
-        `Successfully imported ${successCount} lead${successCount !== 1 ? "s" : ""}`,
+        `Imported ${successCount} lead${successCount !== 1 ? "s" : ""} with ${importedDispositions} disposition${importedDispositions !== 1 ? "s" : ""}`,
       );
     }
-    if (failedCount > 0) {
+    if (failedLeads > 0) {
       toast.warning(
-        `${failedCount} lead${failedCount !== 1 ? "s" : ""} could not be imported`,
+        `${failedLeads} lead${failedLeads !== 1 ? "s" : ""} could not be imported`,
       );
     }
   };
@@ -135,7 +186,8 @@ export default function ImportLeadsModal({
             Import Leads from CSV
           </DialogTitle>
           <DialogDescription>
-            Upload a CSV file exported from this CRM to restore your leads.
+            Upload a CSV file exported from this CRM to restore your leads and
+            full disposition history.
           </DialogDescription>
         </DialogHeader>
 
@@ -190,11 +242,22 @@ export default function ImportLeadsModal({
               <div className="space-y-2">
                 <div className="flex items-center gap-2 p-3 rounded-lg bg-green-50 border border-green-200 dark:bg-green-950/30 dark:border-green-900">
                   <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
-                  <p className="text-sm text-green-700 dark:text-green-400">
+                  <div className="text-sm text-green-700 dark:text-green-400">
                     Found{" "}
                     <span className="font-semibold">{validLeads.length}</span>{" "}
-                    valid lead{validLeads.length !== 1 ? "s" : ""} to import
-                  </p>
+                    valid lead{validLeads.length !== 1 ? "s" : ""}
+                    {totalDispositions > 0 && (
+                      <>
+                        {" "}
+                        with{" "}
+                        <span className="font-semibold">
+                          {totalDispositions}
+                        </span>{" "}
+                        disposition{totalDispositions !== 1 ? "s" : ""}
+                      </>
+                    )}{" "}
+                    to import
+                  </div>
                 </div>
 
                 {invalidCount > 0 && (
@@ -243,6 +306,12 @@ export default function ImportLeadsModal({
                 <p className="text-sm font-medium text-foreground">
                   Importing lead {progress.current} of {progress.total}...
                 </p>
+                {progress.totalDispositions > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {progress.currentDispositions} of{" "}
+                    {progress.totalDispositions} dispositions imported
+                  </p>
+                )}
                 <p className="text-xs text-muted-foreground">
                   Please wait, do not close this window
                 </p>
@@ -272,6 +341,13 @@ export default function ImportLeadsModal({
                 <p className="text-xs text-muted-foreground mt-1">
                   {progress.total} lead{progress.total !== 1 ? "s" : ""}{" "}
                   processed
+                  {progress.totalDispositions > 0 && (
+                    <>
+                      {" "}
+                      with {progress.currentDispositions} disposition
+                      {progress.currentDispositions !== 1 ? "s" : ""} restored
+                    </>
+                  )}
                 </p>
               </div>
             </div>
@@ -307,6 +383,8 @@ export default function ImportLeadsModal({
                 <Upload className="h-4 w-4 mr-2" />
                 Import {validLeads.length} Lead
                 {validLeads.length !== 1 ? "s" : ""}
+                {totalDispositions > 0 &&
+                  ` + ${totalDispositions} Disposition${totalDispositions !== 1 ? "s" : ""}`}
               </Button>
             </>
           )}
